@@ -7,7 +7,7 @@ from lib.core.model.net.arg_scope.resnet_args_cope import resnet_arg_scope
 from train_config import config as cfg
 
 from lib.core.model.sqeeze_excitation.se import se
-
+from lib.core.model.net.mobilenetv3.mobilnet_v3 import hard_swish
 class CenternetHead():
 
     def __call__(self, fms, training=True):
@@ -66,27 +66,28 @@ class CenternetHead():
 
             return final
 
-    def revers_conv(self,fm,output_dim,k_size,refraction=4,scope='boring'):
+    def revers_conv(self,fm,output_dim,scope='boring'):
 
-        input_channel = fm.shape[3].value
 
-        mid_channels=input_channel//refraction
         with tf.variable_scope(scope):
-            fm_bypass = slim.conv2d(fm,
-                             mid_channels,
-                             [1, 1],
+
+            x,y=tf.split(fm,num_or_size_splits=2,axis=3)
+
+            x = slim.separable_conv2d(x,
+                             output_dim//2,
+                             [3, 3],
                              padding='SAME',
-                             scope='1x1')
+                             scope='3x3')
 
-            fm_bypass = slim.separable_conv2d(fm_bypass,
-                                              output_dim,
-                                              [k_size, k_size],
-                                              activation_fn=None,
-                                              padding='SAME',
-                                              scope='3x3')
+            y = slim.separable_conv2d(y,
+                                      output_dim//2,
+                                      [5, 5],
+                                      activation_fn=None,
+                                      padding='SAME',
+                                      scope='5x5')
 
 
-            return fm_bypass
+            return tf.concat([x,y],axis=3)
 
     def _unet_magic(self, fms, dims=cfg.MODEL.head_dims):
 
@@ -95,16 +96,16 @@ class CenternetHead():
         ####24, 116, 232, 464,
 
         c5_upsample = self._complex_upsample(c5, output_dim= dims[0]//2,factor=2, scope='c5_upsample')
-        c4 = self.revers_conv(c4,  dims[0]//2, k_size=5, scope='c4_reverse')
-        p4=tf.nn.relu(tf.concat([c4,c5_upsample],axis=3))
+        c4 = self.revers_conv(c4,  dims[0]//2,  scope='c4_reverse')
+        p4=hard_swish(tf.concat([c4,c5_upsample],axis=3))
 
         c4_upsample = self._complex_upsample(p4, output_dim= dims[1]//2, factor=2,scope='c4_upsample')
-        c3 = self.revers_conv(c3,  dims[1]//2, k_size=5, scope='c3_reverse')
-        p3=tf.nn.relu(tf.concat([c3,c4_upsample],axis=3))
+        c3 = self.revers_conv(c3,  dims[1]//2,  scope='c3_reverse')
+        p3=hard_swish(tf.concat([c3,c4_upsample],axis=3))
 
         c3_upsample = self._complex_upsample(p3, output_dim= dims[2]//2,factor=2, scope='c3_upsample')
-        c2 = self.revers_conv(c2, dims[2]//2,k_size=5,scope='c2_reverse')
-        p2=tf.nn.relu(tf.concat([c2,c3_upsample],axis=3))
+        c2 = self.revers_conv(c2, dims[2]//2,scope='c2_reverse')
+        p2=hard_swish(tf.concat([c2,c3_upsample],axis=3))
 
         final = se(p2, dims[2])
 
